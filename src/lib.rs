@@ -9,7 +9,7 @@ struct ObjectTableIndex(u32);
 
 pub trait Encodable<ECX> {
 
-    fn encode<'token, 'encodable, 'sess>(&'encodable self,
+    fn encode<'encodable, 'sess>(&'encodable self,
                                          session: &mut EncodingSession<'sess, ECX>)
         where 'encodable: 'sess;
 }
@@ -124,5 +124,57 @@ impl<'sess, ECX: 'sess> EncodingSessionRef<'sess, ECX> {
                                                         encodable: &'encodable T) {
         encodable.encode(&mut self.session);
         self.session.write_enqueued_objects();
+    }
+}
+
+
+
+pub trait Decodable<DCX> {
+    fn decode(session: &mut DecodingSession<DCX>) -> Self;
+}
+
+pub trait DecodableObject<DCX> : Decodable<DCX> {
+    fn decode_contents(session: &mut DecodingSession<DCX>) -> Self;
+}
+
+pub trait Decoder {
+    fn set_position(&mut self, position: u64);
+    fn position(&self) -> u64;
+    fn read_u32(&mut self) -> u32;
+}
+
+pub struct DecodingSession<D: Decoder, DCX> {
+    decoder: D,
+    context: DCX,
+    object_table: Vec<u64>
+}
+
+impl<DCX> DecodingSession<DCX> {
+
+    pub fn decode_object<T:DecodableObject<DCX>>(&mut self) -> T {
+        let object_table_index = self.decoder.read_u32();
+
+        let address = self.object_table[object_table_index];
+
+        let current_position = self.decoder.position();
+        self.decoder.set_position(address);
+
+        let object = DecodableObject::decode_contents(self);
+
+        self.decoder.set_position(current_position);
+
+        object
+    }
+}
+
+
+pub struct DecodingSessionRef<D: Decoder, DCX> {
+    session: DecodingSession<D, DCX>
+}
+
+impl<D: Decoder, DCX> DecodingSessionRef<D, DCX> {
+
+    pub fn decode<T: Decodable<DCX>>(&mut self) -> T {
+        Decodable::decode(self.session)
     }
 }
