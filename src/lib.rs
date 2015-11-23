@@ -1,7 +1,4 @@
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry::{Vacant, Occupied};
-
 //! A serialization framework supporting the following features:
 //!
 //! - Arbitrary types can implement the `Encodable` and `Decodable` traits
@@ -23,6 +20,15 @@ use std::collections::hash_map::Entry::{Vacant, Occupied};
 //! - The API is designed in a way that should allow for easily auto-generating
 //!   serialization and deserialization code.
 //! - Completely safe implementation (no `unsafe` used).
+
+
+use std::collections::HashMap;
+use std::collections::hash_map::Entry::{Vacant, Occupied};
+
+
+//=-----------------------------------------------------------------------------
+// ENCODING
+//=-----------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ObjectUid(u64);
@@ -48,10 +54,12 @@ pub trait EncodableObject<ECX> : Encodable<ECX> {
 }
 
 pub trait Encoder {
-    fn emit_u32(&mut self, value: u32);
-    fn emit_u64(&mut self, value: u64);
     fn position(&self) -> u64;
     fn finalize(self: Box<Self>, four_cc: [u8; 4], object_table_address: u64);
+
+    fn emit_u32(&mut self, value: u32);
+    fn emit_u64(&mut self, value: u64);
+    // TODO: Add emit_* methods of other primitive and composite types
 }
 
 pub struct EncodingContext<'ctx, ECX: 'ctx> {
@@ -166,6 +174,10 @@ impl<ECX> EncodingSession<ECX> {
 }
 
 
+//=-----------------------------------------------------------------------------
+// DECODING
+//=-----------------------------------------------------------------------------
+// TODO: The decoding API is still in flux.
 
 pub trait Decodable<DCX> {
     fn decode(context: &mut DecodingContext<DCX>) -> Self;
@@ -179,6 +191,7 @@ pub trait Decoder {
     fn set_position(&mut self, position: u64);
     fn position(&self) -> u64;
     fn read_u32(&mut self) -> u32;
+    fn read_u64(&mut self) -> u64;
 }
 
 pub struct DecodingContext<'ctx, DCX> {
@@ -218,5 +231,99 @@ impl<'ctx, DCX> DecodingSession<'ctx, DCX> {
 
     pub fn decode<T: Decodable<DCX>>(&mut self) -> T {
         Decodable::decode(&mut self.context)
+    }
+}
+
+
+//=-----------------------------------------------------------------------------
+// TEST
+//=-----------------------------------------------------------------------------
+
+struct Ast {
+    id: u64
+}
+
+impl<ECX> Encodable<ECX> for u64 {
+    fn encode<'ecx, 'a: 'ecx>(&'a self, ecx: &mut EncodingContext<'ecx, ECX>) {
+        ecx.encoder().emit_u64(*self)
+    }
+}
+
+impl<DCX> Decodable<DCX> for u64 {
+    fn decode(context: &mut DecodingContext<DCX>) -> u64 {
+        context.decoder().read_u64()
+    }
+}
+
+impl<ECX> Encodable<ECX> for Ast {
+    fn encode<'ecx, 'a: 'ecx>(&'a self, ecx: &mut EncodingContext<'ecx, ECX>) {
+        Encodable::encode(&self.id, ecx)
+    }
+}
+
+impl<DCX> Decodable<DCX> for Ast {
+    fn decode(context: &mut DecodingContext<DCX>) -> Ast {
+        Ast { id: Decodable::decode(context) }
+    }
+}
+
+impl<T: Encodable<ECX>, ECX> Encodable<ECX> for Option<T> {
+    fn encode<'ecx, 'a: 'ecx>(&'a self, ecx: &mut EncodingContext<'ecx, ECX>) {
+        match *self {
+            None => {
+                ecx.encoder().emit_u32(0)
+            }
+            Some(ref value) => {
+                ecx.encoder.emit_u32(1);
+                Encodable::encode(value, ecx)
+            }
+        }
+    }
+}
+
+impl<T: Decodable<DCX>, DCX> Decodable<DCX> for Option<T> {
+    fn decode(context: &mut DecodingContext<DCX>) -> Option<T> {
+        let disr = context.decoder().read_u32();
+        if disr == 0 {
+            None
+        }
+        else {
+            Some(Decodable::decode(context))
+        }
+    }
+}
+
+struct Ty<'tcx> {
+    id: u64,
+    ast: Ast,
+    sub_ty: Option<&'tcx Ty<'tcx>>
+}
+
+trait TyRestoreContext<'tcx> {
+    fn create_interned(&self, id: u64, ast: Ast, sub_ty: Option<&'tcx Ty<'tcx>>) -> &'tcx Ty<'tcx>;
+}
+
+
+impl<'tcx, DCX: TyRestoreContext<'tcx>> Decodable<DCX> for &'tcx Ty<'tcx> {
+    fn decode(context: &mut DecodingContext<DCX>) -> &'tcx Ty<'tcx> {
+        let id = Decodable::decode(context);
+        let ast = Decodable::decode(context);
+        let sub_ty = Decodable::decode(context);
+
+        context.extra.create_interned(id, ast, sub_ty)
+    }
+}
+
+impl<'tcx, DCX: TyRestoreContext<'tcx>> Decodable<DCX> for Ty<'tcx> {
+    fn decode(context: &mut DecodingContext<DCX>) -> Ty<'tcx> {
+        let id = Decodable::decode(context);
+        let ast = Decodable::decode(context);
+        let sub_ty = Decodable::decode(context);
+
+        Ty {
+            id: id,
+            ast: ast,
+            sub_ty: sub_ty
+        }
     }
 }
