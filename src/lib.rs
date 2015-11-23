@@ -31,9 +31,11 @@ use std::collections::hash_map::Entry::{Vacant, Occupied};
 //=-----------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
-pub struct ObjectUid(u64);
+pub struct Address(u64);
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ObjectTableIndex(u32);
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+pub struct ObjectUid(u64);
 
 /// Something that can be encoded given a certain context ECX.
 pub trait Encodable<ECX> {
@@ -54,8 +56,8 @@ pub trait EncodableObject<ECX> : Encodable<ECX> {
 }
 
 pub trait Encoder {
-    fn position(&self) -> u64;
-    fn finalize(self: Box<Self>, four_cc: [u8; 4], object_table_address: u64);
+    fn position(&self) -> Address;
+    fn finalize(self: Box<Self>, four_cc: [u8; 4], object_table_address: Address);
 
     fn emit_u32(&mut self, value: u32);
     fn emit_u64(&mut self, value: u64);
@@ -65,7 +67,7 @@ pub trait Encoder {
 pub struct EncodingContext<'ctx, ECX: 'ctx> {
     encoder: &'ctx mut Encoder,
     object_table_indices: &'ctx mut HashMap<ObjectUid, ObjectTableIndex>,
-    object_table: &'ctx mut Vec<u64>,
+    object_table: &'ctx mut Vec<Address>,
     delayed_writes: &'ctx mut Vec<(&'ctx EncodableObject<ECX>, ObjectTableIndex)>,
     pub extra: &'ctx mut ECX
 }
@@ -98,7 +100,7 @@ impl<'sess, ECX: 'sess> EncodingContext<'sess, ECX> {
                 // TODO: make this a safe conversion
                 let index = ObjectTableIndex(self.object_table.len() as u32);
                 vacant.insert(index);
-                self.object_table.push(u64::max_value());
+                self.object_table.push(Address(u64::max_value()));
                 (index, true)
             }
         }
@@ -132,7 +134,7 @@ impl<'sess, ECX: 'sess> EncodingContext<'sess, ECX> {
 pub struct EncodingSession<ECX> {
     encoder: Box<Encoder>,
     object_table_indices: HashMap<ObjectUid, ObjectTableIndex>,
-    object_table: Vec<u64>,
+    object_table: Vec<Address>,
     pub context: ECX
 }
 
@@ -147,8 +149,10 @@ impl<ECX> EncodingSession<ECX> {
         }
     }
 
-    pub fn encode<T: Encodable<ECX>>(&mut self, encodable: &T) {
+    pub fn encode<T: Encodable<ECX>>(&mut self, encodable: &T) -> Address {
         let mut delayed_writes = Vec::new();
+
+        let address = self.encoder.position();
 
         let mut context = EncodingContext {
             encoder: &mut *self.encoder,
@@ -160,13 +164,15 @@ impl<ECX> EncodingSession<ECX> {
 
         encodable.encode(&mut context);
         context.write_enqueued_objects();
+
+        address
     }
 
     pub fn finalize(mut self, four_cc: [u8; 4]) {
         let object_table_address = self.encoder.position();
 
         for object_table_entry in self.object_table {
-            self.encoder.emit_u64(object_table_entry);
+            self.encoder.emit_u64(object_table_entry.0);
         }
 
         self.encoder.finalize(four_cc, object_table_address);
@@ -188,15 +194,15 @@ pub trait DecodableObject<DCX> : Decodable<DCX> {
 }
 
 pub trait Decoder {
-    fn set_position(&mut self, position: u64);
-    fn position(&self) -> u64;
+    fn set_position(&mut self, position: Address);
+    fn position(&self) -> Address;
     fn read_u32(&mut self) -> u32;
     fn read_u64(&mut self) -> u64;
 }
 
 pub struct DecodingContext<'ctx, DCX> {
     decoder: &'ctx mut Decoder,
-    object_table: Vec<u64>,
+    object_table: Vec<Address>,
     pub extra: DCX,
 }
 
