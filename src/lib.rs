@@ -168,12 +168,18 @@ impl<ECX> EncodingSession<ECX> {
         address
     }
 
+    pub fn add_to_export_table(name: &[u8], address: Address) {
+        // TODO
+    }
+
     pub fn finalize(mut self, four_cc: [u8; 4]) {
         let object_table_address = self.encoder.position();
 
         for object_table_entry in self.object_table {
             self.encoder.emit_u64(object_table_entry.0);
         }
+
+        // TODO: emit export table
 
         self.encoder.finalize(four_cc, object_table_address);
     }
